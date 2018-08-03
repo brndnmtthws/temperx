@@ -89,6 +89,8 @@ func output() {
 	c, err := statsd.New(statsd.Address(statsd_host), statsd.Prefix(statsd_prefix))
 	if err != nil {
 		log.Println("statsd error: ", err)
+	} else {
+		log.Printf("statsd host=%v prefix=%v", statsd_host, statsd_prefix)
 	}
 
 	hid.UsbWalk(func(device hid.Device) {
