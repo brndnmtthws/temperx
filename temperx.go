@@ -2,14 +2,17 @@ package main
 
 import (
 	"fmt"
-	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
-	"github.com/zserge/hid"
 	"log"
 	"os"
 	"time"
+
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"github.com/zserge/hid"
+	"gopkg.in/alexcesaro/statsd.v2"
 )
 
+var idx = 0
 var (
 	rootCmd = &cobra.Command{
 		Use: "temperx",
@@ -20,16 +23,20 @@ var (
 		},
 	}
 
-	home    = os.Getenv("HOME")
-	tf      float64
-	to      float64
-	hf      float64
-	ho      float64
-	conf    string
-	verbose bool
+	home          = os.Getenv("HOME")
+	tf            float64
+	to            float64
+	hf            float64
+	ho            float64
+	conf          string
+	statsd_prefix string
+	statsd_host   string
+	verbose       bool
 )
 
 func main() {
+	rootCmd.Flags().StringVar(&statsd_prefix, "prefix", "temperx", "statsd prefix")
+	rootCmd.Flags().StringVar(&statsd_host, "host", "127.0.0.1:8125", "statsd host")
 	rootCmd.Flags().Float64Var(&tf, "tf", 1, "Factor for temperature")
 	rootCmd.Flags().Float64Var(&to, "to", 0, "Offset for temperature")
 	rootCmd.Flags().Float64Var(&hf, "hf", 1, "Factor for humidity")
@@ -47,9 +54,18 @@ func main() {
 	}
 }
 
+func temperature(hh uint8, ll uint8) float64 {
+	xtemp := 256*float64(hh) + float64(ll)
+	if xtemp > 0x4000 {
+		return -((0x4000 - (xtemp / 4)) * 0.03125)
+	}
+	return ((xtemp / 4.0) * 0.03125)
+
+}
+
 func output() {
 	if conf != "" {
-		if verbose == true {	
+		if verbose == true {
 			fmt.Println("Trying to read configuration from:", conf)
 		}
 		viper.SetConfigFile(conf)
@@ -70,8 +86,13 @@ func output() {
 		fmt.Println("hf:", hf)
 		fmt.Println("ho:", ho)
 	}
+	c, err := statsd.New(statsd.Address(statsd_host), statsd.Prefix(statsd_prefix))
+	if err != nil {
+		log.Println("statsd error: ", err)
+	}
 
 	hid.UsbWalk(func(device hid.Device) {
+		idx++
 		info := device.Info()
 		id := fmt.Sprintf("%04x:%04x:%04x:%02x", info.Vendor, info.Product, info.Revision, info.Interface)
 		if id != hid_path {
@@ -91,9 +112,11 @@ func output() {
 		}
 
 		if buf, err := device.Read(-1, 1*time.Second); err == nil {
-			tmp := (float64(buf[2])*256+float64(buf[3]))/100*tf + to
-			hum := (float64(buf[4])*256+float64(buf[5]))/100*hf + ho
-			fmt.Printf("Temperature: %v, Humidity: %v\n", tmp, hum)
+			tmp := temperature(buf[2], buf[3])
+			fmt.Printf("ID: %d, Temperature: %v\n", idx, tmp)
+			stat := fmt.Sprintf("%d.temperature", idx)
+			c.Gauge(stat, tmp)
 		}
 	})
+	c.Flush()
 }
